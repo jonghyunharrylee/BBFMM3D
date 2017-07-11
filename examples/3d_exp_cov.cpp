@@ -153,7 +153,7 @@ public:
         diff.x = sourcepos.x - fieldpos.x;
         diff.y = sourcepos.y - fieldpos.y;
         diff.z = sourcepos.z - fieldpos.z;
-        double r = sqrt(diff.x*diff.x/5. + diff.y*diff.y/5. + diff.z*diff.z/1.5);
+        double r = sqrt(diff.x*diff.x/100. + diff.y*diff.y/100. + diff.z*diff.z/2.25);
         *K = 0.75*exp(-r);
     }
 };
@@ -185,7 +185,8 @@ int main(int argc, char *argv[]) {
 	double* q = new double[Ns*dof.s*m]; // Source array
 
 	SetSources(field,Nf,source,Ns,q,m,&dof,L,nx,ny,nz);
-	cout << "q[0] : " << q[0] << " q[end] : " << q[Ns-1] << endl;
+	//cout << "q[0] : " << q[0] << " q[end] : " << q[Ns-1] << endl;
+
 
 
 	//double err;
