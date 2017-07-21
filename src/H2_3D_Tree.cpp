@@ -917,12 +917,13 @@ void H2_3D_Tree::ComputeSn(vector3 *point, double *Tkz, int n, int N, vector3 *S
                 for (j=n-1;j>0;j--)
                     d[j] = 2.0*x*d[j+1] - d[j+2] + vec[j];
                 Sn[k+i].y = x*d[1] - d[2] + 0.5*vec[0];
-                
+
                 x = point[i].z;
                 d[n] = d[n+1] = 0.;
                 for (j=n-1;j>0;j--)
                     d[j] = 2.0*x*d[j+1] - d[j+2] + vec[j];
                 Sn[k+i].z = x*d[1] - d[2] + 0.5*vec[0];
+
             }
         }
 	}
@@ -1058,6 +1059,10 @@ void H2_3D_Tree::NewNode(nodeT **A, vector3 center, double L, int n) {
 	int i;
 	for (i=0;i<8;i++)
 		(*A)->leaves[i] = NULL;
+    for (i=0;i<27;i++) {
+        (*A)->neighborComputed[i] = false;
+        (*A)->neighbors[i] = NULL;
+    }
 	(*A)->parent = NULL;
 	
     (*A)->fieldval  = NULL;
@@ -1072,6 +1077,12 @@ void H2_3D_Tree::NewNode(nodeT **A, vector3 center, double L, int n) {
 	(*A)->Ns         = 0;
 	(*A)->ineigh     = 0;
 	(*A)->iinter     = 0;
+    (*A)->chargeComputed = false;
+    (*A)->locationComputed = false;
+    (*A)->location = NULL;
+    (*A)->charge = NULL;
+    (*A)->max_neighbor_Ns = 0;
+    (*A)->nodePhi = NULL;
 }
 
 /*void H2_3D_Tree::get_Compression_Rate(double* Ucomp, double* Vcomp) {
@@ -1087,6 +1098,37 @@ void H2_3D_Tree::NewNode(nodeT **A, vector3 center, double L, int n) {
     EvaluateKernel(fieldpos, sourcepos, K, dof_kernel);
 }*/
 
+
+void H2_3D_Tree::get_Charge(nodeT*& node, double* q){
+    if(node->chargeComputed==true){
+        return;
+    }
+    else{
+        node->chargeComputed    =   true;
+        node->charge = (double*) malloc(node->Ns*sizeof(double));  // TODO: change 1 to m for later 
+        for(int k=0;k<node->Ns;++k){
+            node->charge[k] =  q[node->sourcelist[k]];
+        }
+    }
+}
+
+void H2_3D_Tree::get_Location(nodeT*& node, vector3 *source){
+    if(node->locationComputed==true){
+        return;
+    }
+    else{
+        node->locationComputed    =   true;
+        node->location = (vector3*) malloc(node->Ns * sizeof(vector3));
+        int l;
+        for(int k=0;k<node->Ns;++k){
+            l = node->sourcelist[k];
+            node->location[k].x = source[l].x;
+            node->location[k].y = source[l].y;
+            node->location[k].z = source[l].z;
+        }
+    }
+}
+
 void H2_3D_Tree::FreeNode(nodeT *A) {
 	int i;
 	
@@ -1095,7 +1137,7 @@ void H2_3D_Tree::FreeNode(nodeT *A) {
 		if (A->leaves[i] != NULL) {
 			FreeNode(A->leaves[i]);
 		}
-	}
+    }
 	
     // Free the arrays for the field and source values
 	if (A->fieldval != NULL)
@@ -1111,6 +1153,14 @@ void H2_3D_Tree::FreeNode(nodeT *A) {
         free(A->fieldlist), A->fieldlist=NULL;
 	if (A->sourcelist != NULL)
         free(A->sourcelist), A->sourcelist=NULL;
+    if (A->location != NULL)
+        free(A->location), A->location=NULL;
+    if (A->charge != NULL)
+        free(A->charge), A->charge=NULL;
+    if (A->fieldlist != NULL)
+        free(A->fieldlist), A->fieldlist=NULL;
+    if (A->nodePhi != NULL)
+        free(A->nodePhi), A->nodePhi=NULL;
 	
     // Last free the node
 	free(A);

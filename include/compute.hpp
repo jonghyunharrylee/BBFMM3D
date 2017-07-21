@@ -34,8 +34,9 @@ public:
     void DownwardPass(nodeT **A, vector3 *field, vector3 *source,
                       double *Cweights, double *Tkz, double *q, doft *cutoff,
                       int n, doft *dof, double *stress, int use_chebyshev);
-    void EvaluateField(vector3 *field, vector3 *source, double *q, int Nf,
-                       int Ns, doft *dof, double *fieldval);
+    void EvaluateField(vector3* field, vector3* source, int Nf,int Ns, doft *dof, double* Kcell);
+    void EvaluateField_self(vector3* field, int Nf, doft *dof, double* Kcell);
+
     void Local2Local(int n, double *r, double *F, double *Fchild, doft *dof, double *Cweights, int use_chebyshev);
     void Moment2Local(int n, double *R, double *cell_mpCoeff, double *FFCoeff,
                  double *E, int *Ktable, doft *dof, doft *cutoff, double *VT,
@@ -77,25 +78,16 @@ H2_3D_Compute<T>::H2_3D_Compute(T * FMMTree,vector3 * field, vector3 *source, in
     vector3 xmax;
     xmax.x = -1e32; xmax.y = -1e32; xmax.z = -1e32;
 
-    for (int i = 0; i < Ns; ++i) {
-    xmin.x = min(xmin.x, source[i].x);
-    xmin.y = min(xmin.y, source[i].y);
-    xmin.z = min(xmin.z, source[i].z);
-
-    xmax.x = max(xmax.x, source[i].x);
-    xmax.y = max(xmax.y, source[i].y);
-    xmax.z = max(xmax.z, source[i].z);
-    }
 
    
     for (int i = 0; i < Nf; ++i) {
-    xmin.x = min(xmin.x, field[i].x);
-    xmin.y = min(xmin.y, field[i].y);
-    xmin.z = min(xmin.z, field[i].z);
+        xmin.x = min(xmin.x, field[i].x);
+        xmin.y = min(xmin.y, field[i].y);
+        xmin.z = min(xmin.z, field[i].z);
 
-    xmax.x = max(xmax.x, field[i].x);
-    xmax.y = max(xmax.y, field[i].y);
-    xmax.z = max(xmax.z, field[i].z);
+        xmax.x = max(xmax.x, field[i].x);
+        xmax.y = max(xmax.y, field[i].y);
+        xmax.z = max(xmax.z, field[i].z);
     }
 
     vector3 ctr;
@@ -103,11 +95,6 @@ H2_3D_Compute<T>::H2_3D_Compute(T * FMMTree,vector3 * field, vector3 *source, in
     ctr.y = 0.5 * (xmin.y + xmax.y);
     ctr.z = 0.5 * (xmin.z + xmax.z);
 
-    for (int i = 0; i < Ns; ++i) {
-        source[i].x = source[i].x - ctr.x;
-        source[i].y = source[i].y - ctr.y;
-        source[i].z = source[i].z - ctr.z;
-    }
 
     for (int i = 0; i < Nf; ++i) {
         field[i].x = field[i].x - ctr.x;
@@ -117,18 +104,18 @@ H2_3D_Compute<T>::H2_3D_Compute(T * FMMTree,vector3 * field, vector3 *source, in
 
 
     this-> field    =   field;
-    this-> source   =   source;
+    this-> source   =   field;
     this-> Ns       =   Ns;
     this-> Nf       =   Nf;
     this->charge    =   charge;
     this->m         =   m;
+
     FMMDistribute(&FMMTree->tree,field,source,Nf,Ns, FMMTree->level);
     for (int i = 0; i < m; i++) { // TODO: pass in as matrix instead of vector.
         FMMCompute(&FMMTree->tree,field,source,&charge[i*Ns],FMMTree->K,FMMTree->U,FMMTree->VT,FMMTree->Tkz,FMMTree->Ktable,FMMTree->Kweights,FMMTree->Cweights,
                    FMMTree->homogen,&FMMTree->cutoff,FMMTree->n,FMMTree->dof,&stress[i*Nf], FMMTree->use_chebyshev,FMMTree->p_r2c, FMMTree->p_c2r);
     }
     FMMTree->computed = true;
-    
 }
 
 /*
@@ -140,36 +127,25 @@ H2_3D_Compute<T>::H2_3D_Compute(T * FMMTree,vector3 * field, vector3 *source, in
 template <typename T>
 void H2_3D_Compute<T>::FMMDistribute(nodeT **A, vector3 *field, vector3 *source, int Nf,int Ns, int level) {
 	int i;
-	vector3 cshift;
-	int *fieldlist, *sourcelist;
+	int *fieldlist;
 	fieldlist = (int *)malloc(Nf * sizeof(int));
-	sourcelist = (int *)malloc(Ns * sizeof(int));
 	
     // Initialize the point distribution for the root node
 	for (i=0;i<Nf;i++)
 		fieldlist[i] = i;
-	for (i=0;i<Ns;i++)
-		sourcelist[i] = i;
 	(*A)->Nf = Nf;
 	(*A)->Ns = Ns;
 	
     // Distribute all of the sources and field points to the appropriate cell
-	DistributeFieldPoints(A,field,fieldlist,level); // TODO: field and source points set to be the same; ask Harry. 
-	DistributeSources(A,source,sourcelist,level);
+	DistributeFieldPoints(A,field,fieldlist,level); 
 	
     // Construct the interaction list for the entire octree
 	(*A)->neighbors[0] = *A;
+    (*A)->max_neighbor_Ns = max((*A)->max_neighbor_Ns, (*A)->Ns);
 	(*A)->ineigh = 1;
-	cshift.x = 0;
-	cshift.y = 0;
-	cshift.z = 0;
-	(*A)->cshiftneigh[0] = cshift;
 	InteractionList(A,level);  // build the interaction that need to be computed
-	
     
 	free(fieldlist);
-    fieldlist = NULL;
-	free(sourcelist);
     fieldlist = NULL;
 }
 
@@ -200,10 +176,7 @@ void H2_3D_Compute<T>::UpwardPass(nodeT **A, vector3 *source, double *q, double 
 	if ((*A)->leaves[0] != NULL) {  // Going up the tree M2M
         
         // Allocate memory for the source values and initialize
-		(*A)->sourceval = (double *)malloc(n3*sizeof(double));
-		for (l=0;l<n3;l++) {
-            (*A)->sourceval[l] = 0;
-        }
+		(*A)->sourceval = (double *)calloc(n3, sizeof(double));
 		
         // Determine which children cells contain sources
 		for (i=0;i<8;i++) {
@@ -334,9 +307,9 @@ void H2_3D_Compute<T>::FMMInteraction(nodeT **A, double *E, int *Ktable, double 
     int shift = (curTreeLevel>=2) ? curTreeLevel-2: 0;
     shift *= !homogen;
         
-    int i, j, l;
+    int i, j;
     int cutoff_f = cutoff->f;
-    vector3 fcenter, scenter, cshift;
+    vector3 fcenter, scenter;
     double *F;
     nodeT *B;
     
@@ -378,9 +351,7 @@ void H2_3D_Compute<T>::FMMInteraction(nodeT **A, double *E, int *Ktable, double 
     int ninter = (*A)->iinter;
     
     double *FFCoeff = (double*)malloc(matSizeDof *sizeof(double));
-    double* Pf = (double*)malloc(cutoff_f *sizeof(double));
-    for (i=0;i<cutoff_f;i++)
-		Pf[i] = 0;
+    double* Pf = (double*)calloc(cutoff_f, sizeof(double));
 
     // Compute the field values due to all members of the interaction list
     for (i=0;i<ninter;i++) {
@@ -389,10 +360,6 @@ void H2_3D_Compute<T>::FMMInteraction(nodeT **A, double *E, int *Ktable, double 
         
         // Obtain the center of the source cell
         scenter = B->center;
-        cshift = (*A)->cshiftinter[i];
-        scenter.x += cshift.x;
-        scenter.y += cshift.y;
-        scenter.z += cshift.z;
 		
         // Note this is the normalized vector
         double R[3];
@@ -415,7 +382,7 @@ void H2_3D_Compute<T>::FMMInteraction(nodeT **A, double *E, int *Ktable, double 
                 productfre[j] += FFCoeff[j];
         }else {
         
-        Moment2Local(n, R, B->sourceval, FFCoeff, E +Ksize*shift, Ktable,
+            Moment2Local(n, R, B->sourceval, FFCoeff, E +Ksize*shift, Ktable,
                      dof, cutoff, VT +Vsize*shift, Kweights, use_chebyshev);
             for (j=0; j<cutoff_f; j++)
                 Pf[j] += FFCoeff[j];
@@ -454,10 +421,8 @@ void H2_3D_Compute<T>::FMMInteraction(nodeT **A, double *E, int *Ktable, double 
 	    dgemv_(trans,&n3,&cutoff_f,&scale,U+Usize*shift,&n3,Pf,&incr,&beta,F,&incr);  // 3c
         
 	    // Adjust the field values by the appropriate weight
-	    l = 0;
 	    for (i=0;i<n3;i++) {
-            F[l] *= Kweights[i];
-            l++;
+            F[i] *= Kweights[i];
 	    }
 	}
 	else {
@@ -516,8 +481,7 @@ void H2_3D_Compute<T>::DownwardPass(nodeT **A, vector3 *field, vector3 *source,
 		}
 		
 	} else {
-        int Nf = (*A)->Nf, Ns, i, j, k, m, *fieldlist = (*A)->fieldlist, nneigh = (*A)->ineigh,
-        *sourcelist;
+        int Nf = (*A)->Nf, Ns, i, j, m, *fieldlist = (*A)->fieldlist;
         int l, l1, l2, l3;
         double sum, prefac  = 2.0/(double)n;          // Prefactor for Sn
         if(!use_chebyshev)
@@ -525,33 +489,28 @@ void H2_3D_Compute<T>::DownwardPass(nodeT **A, vector3 *field, vector3 *source,
         double prefac3 = prefac*prefac*prefac;   // prefac3 = prefac^3
         double *F = (*A)->fieldval;
         
-        double ihalfL = 2./(*A)->length, tmp1, tmp2, *qsource, fieldval[Nf];
-        vector3 fieldt[Nf], fieldpos[Nf], Sf[n*Nf], fcenter = (*A)->center, cshift,
-        *sourcepos;
+        double ihalfL = 2./(*A)->length, tmp1, tmp2;
+        vector3 fieldt[Nf], Sf[n*Nf], fcenter = (*A)->center;
         nodeT *B;
-        
+
+        // Obtain the positions of the field points
+        FMMTree->get_Location(*A, field);
+        FMMTree->get_Charge(*A, q);
+
         // Map all field points to the box ([-1 1])^3
         for (i=0;i<Nf;i++) {
-            k = fieldlist[i];
-            fieldt[i].x = ihalfL*(field[k].x - fcenter.x);
-            fieldt[i].y = ihalfL*(field[k].y - fcenter.y);
-            fieldt[i].z = ihalfL*(field[k].z - fcenter.z);
+            fieldt[i].x = ihalfL*((*A)->location[i].x - fcenter.x);
+            fieldt[i].y = ihalfL*((*A)->location[i].y - fcenter.y);
+            fieldt[i].z = ihalfL*((*A)->location[i].z - fcenter.z);
         }
         
         // Compute Sf, the mapping function for the field points
         FMMTree->ComputeSn(fieldt,Tkz,n,Nf,Sf, use_chebyshev);
         
-        // Obtain the positions of the field points
-        for (i=0;i<Nf;i++) {
-            k = fieldlist[i];
-            fieldpos[i].x = field[k].x;
-            fieldpos[i].y = field[k].y;
-            fieldpos[i].z = field[k].z;
-        }
+
         
         // Compute the values at the field points
         for (i=0;i<Nf;i++) {
-            k = fieldlist[i];
             // Due to far field interactions
             sum = 0;
             l = 0;
@@ -560,44 +519,63 @@ void H2_3D_Compute<T>::DownwardPass(nodeT **A, vector3 *field, vector3 *source,
                 for (l2=0;l2<n;l2++) {
                     tmp2 = tmp1*Sf[l2*Nf+i].y;
                     for (l3=0;l3<n;l3++) {
-                        sum += F[l]*tmp2*Sf[l3*Nf+i].z;
+                        sum += F[l]*tmp2*Sf[l3*Nf+i].z; // TODO: memory access pattern is bad here
                         l += 1;
                     }
                 }
             }
-            phi[k] = prefac3*sum;
-            k++;
+            (*A)->nodePhi[i] += prefac3*sum;
         }
+
+
         
         // Due to near field interactions (comment out if you want to substract P2P interactions)
-        for (m=0;m<nneigh;m++) { // TODO: consider symmtric.  OpenMP
+        double *Kcell;
+        Kcell = (double*) malloc(Nf * (*A)->max_neighbor_Ns * sizeof(double));
+
+        for (m=0;m<27;m++) { // TODO: consider symmtric.  OpenMP
             B = (*A)->neighbors[m];
-            sourcelist = B->sourcelist;
+            if (B == NULL || (*A)->neighborComputed[m])
+                continue;
+                        
             Ns = B->Ns;
-            cshift = (*A)->cshiftneigh[m];
+            FMMTree->get_Location(B, source);
+            FMMTree->get_Charge(B, q);
             
-            sourcepos = (vector3 *)malloc(Ns*sizeof(vector3)); // TODO: reduce malloc?
-            qsource = (double *)malloc(Ns*sizeof(double));
-            for (j=0;j<Ns;j++) {
-                l = sourcelist[j];
-                sourcepos[j].x = source[l].x + cshift.x;
-                sourcepos[j].y = source[l].y + cshift.y;
-                sourcepos[j].z = source[l].z + cshift.z;
-                qsource[j] = q[l]; // TODO: only fetch qsource once. 
+            // compute submatrix
+            bool is_self_interaction = m == 13;
+            if (is_self_interaction){
+                EvaluateField_self((*A)->location,  Nf, dof, Kcell);
             }
-            
-            EvaluateField(fieldpos,sourcepos,qsource,Nf,Ns,dof,fieldval);
-            
-            for (i=0;i<Nf;i++) {
-                j = fieldlist[i];
-                phi[j] += fieldval[i];
+            else{
+                EvaluateField((*A)->location,B->location, Nf,Ns,dof, Kcell);
             }
+
+
+            // apply matrix to vector
+            double alpha = 1, beta = 1;
+            int incr = 1;
+            char trans[] = "n";
+            dgemv_(trans, &Nf, &Ns, &alpha, Kcell, &Nf, B->charge, &incr, &beta, (*A)->nodePhi, &incr);
+
             
-            free(sourcepos);
-            sourcepos = NULL;
-            free(qsource);
-            qsource = NULL;
+
+            // Do the symmtric part
+            if (!is_self_interaction) {
+                trans[0] = 't';
+                dgemv_(trans, &Nf, &Ns, &alpha, Kcell, &Nf, (*A)->charge, &incr, &beta,  B->nodePhi, &incr);
+                B->neighborComputed[26-m] = true; 
+            }
         }
+
+        // transfer potential to the tree
+        for (i=0;i<Nf;i++) { 
+            j = fieldlist[i];
+            phi[j] += (*A)->nodePhi[i];
+        }
+
+        free(Kcell);
+        Kcell = NULL;
 	}
 }
 
@@ -608,36 +586,26 @@ void H2_3D_Compute<T>::DownwardPass(nodeT **A, vector3 *field, vector3 *source,
  * P2P kernel.
  */
 template <typename T>
-void H2_3D_Compute<T>::EvaluateField(vector3 *field, vector3 *source, double *q, int Nf,int Ns, doft *dof, double *fieldval) {
-	/* Compute K*q
-	 * K is (dof->f*Nf) x (dof->s*Ns)
-	 * q is a vector of length dof->s*Ns
-	 * q stores q[Ns][dof->s] in row major
-	 * so the result fieldval[Nf][dof->f] is also in row major
-	 */
-    
+void H2_3D_Compute<T>::EvaluateField(vector3* field, vector3* source, int Nf,int Ns, doft *dof, double* Kcell) {
 	int i, j;
-    
-	// Kij is the point to point kernel
-	// Kcell stores all the Kij's
-	
-	double *Kcell;
-	Kcell = (double*) malloc(Nf * Ns * sizeof(double));
-    
 	for (j=0;j<Ns;j++) {
+        vector3 cur_source = source[j];
 		for (i=0;i<Nf;i++) {
-            FMMTree->EvaluateKernel(field[i],source[j],&Kcell[i + Nf * j],dof);
+            FMMTree->EvaluateKernel(field[i],cur_source,&Kcell[i + Nf * j],dof);
 		}
 	}
+}
 
-	// Do matrix vector product
-	double alpha = 1, beta = 0;
-    int incr = 1;
-	char trans[] = "n";
-	dgemv_(trans, &Nf, &Ns, &alpha, Kcell, &Nf, q, &incr, &beta, fieldval, &incr);
-    
-	free(Kcell);
-    Kcell = NULL;
+template <typename T>
+void H2_3D_Compute<T>::EvaluateField_self(vector3* field, int Nf, doft *dof, double* Kcell) {
+    int i, j;
+    for (j=0;j<Nf;j++) {
+        vector3 cur_field = field[j];
+        for (i=0;i<=j;i++) {
+            FMMTree->EvaluateKernel(field[i],cur_field,&Kcell[i + Nf * j],dof);
+            Kcell[j + Nf * i] = Kcell[i + Nf * j];
+        }
+    }
 }
 
 
@@ -911,15 +879,13 @@ void H2_3D_Compute<T>::Moment2Moment(int n, double *r, double *Schild, double *S
  */
 template <typename T>
 void H2_3D_Compute<T>::InteractionList(nodeT **A, int levels) {
-	int i, j, k, ineigh, iinter, nneigh;
+	int i, j, k, iinter;
 	nodeT *B, *C;
-	vector3 center1, center2, cshift, diff;
+	vector3 center1, center2, diff;
 	double cutoff;
 	
 	assert((*A)->Nf > 0);
-	
 	if (levels > 0) {
-		nneigh = (*A)->ineigh;
 		
 		/* Sets the cutoff between near and far to be L (this is equivalent
 		 * to a one cell buffer) */
@@ -930,17 +896,16 @@ void H2_3D_Compute<T>::InteractionList(nodeT **A, int levels) {
 		 * Also finds the neighboring cells that are sufficiently
 		 * far away and stores them in interaction array
 		 */
-		for (i=0;i<nneigh;i++) {
+
+		for (i=0;i<27;i++) {
+            if ((*A)->neighbors[i] == NULL)
+                continue;
 			B = (*A)->neighbors[i]; // All the neighbors of A
-			cshift = (*A)->cshiftneigh[i];
 			for (j=0;j<8;j++) {
 				if (B->leaves[j]->Ns != 0) { // All the children j of the neighbor cluster A
 					/* Skip empty neighbor clusters. */
 					
 					center1 = B->leaves[j]->center;
-					center1.x += cshift.x;
-					center1.y += cshift.y;
-					center1.z += cshift.z;
 					
 					for (k=0;k<8;k++) {
 						C = (*A)->leaves[k]; // Child k of cluster A
@@ -948,7 +913,6 @@ void H2_3D_Compute<T>::InteractionList(nodeT **A, int levels) {
 						if (C->Nf != 0) {
 							/* Skip empty children clusters. */
 							
-							ineigh = C->ineigh;
 							iinter = C->iinter;
 							center2 = C->center;
 							
@@ -956,20 +920,20 @@ void H2_3D_Compute<T>::InteractionList(nodeT **A, int levels) {
 							diff.y = center1.y - center2.y;
 							diff.z = center1.z - center2.z;
 							
-                            int x = round(fabs(diff.x / cutoff));
-                            int y = round(fabs(diff.y / cutoff));
-                            int z = round(fabs(diff.z / cutoff));
+                            int x = round(diff.x / cutoff);
+                            int y = round(diff.y / cutoff);
+                            int z = round(diff.z / cutoff);
 
-                            bool is_well_seperated = x > 1 || y > 1 || z > 1;
+                            bool is_well_seperated = abs(x) > 1 || abs(y) > 1 || abs(z) > 1;
 
 
 							if (!is_well_seperated) {
-								C->neighbors[ineigh] = B->leaves[j]; // This is a neighbor
-								C->cshiftneigh[ineigh] = cshift;
+                                int index = 9*(x+1) + 3*(y+1) + (z+1);
+								C->neighbors[index] = B->leaves[j]; // This is a neighbor
+                                C->max_neighbor_Ns = max(C->max_neighbor_Ns, B->leaves[j]->Ns);
 								C->ineigh++;
 							} else {
 								C->interaction[iinter] = B->leaves[j]; // This is a well-separated cluster
-								C->cshiftinter[iinter] = cshift;
 								C->iinter++;
 							}
 						}
@@ -1084,7 +1048,7 @@ void H2_3D_Compute<T>::DistributeFieldPoints(nodeT **A, vector3 *field, int *fie
 	int i, j, k, m, z;
 	int Nf = (*A)->Nf;
 	vector3 point, center;
-	int *fieldcell[8], *F;
+	int *fieldcell[8], *F, *S;
 	for (z = 0; z < 8; z++)
 		fieldcell[z] = (int *)malloc(Nf * sizeof(int));
 	
@@ -1130,6 +1094,7 @@ void H2_3D_Compute<T>::DistributeFieldPoints(nodeT **A, vector3 *field, int *fie
 				m = (*A)->leaves[j]->Nf;
 				fieldcell[j][m] = k;
 				(*A)->leaves[j]->Nf++;
+                (*A)->leaves[j]->Ns++;
 			}
 			
             // Recursively distribute the points
@@ -1141,9 +1106,16 @@ void H2_3D_Compute<T>::DistributeFieldPoints(nodeT **A, vector3 *field, int *fie
 	} else if (levels == 0) {
 		Nf = (*A)->Nf;
 		(*A)->fieldlist = (int *)malloc(Nf*sizeof(int));
+        (*A)->sourcelist =(int *)malloc(Nf*sizeof(int));
+
+        (*A)->nodePhi = (double*)calloc(Nf,sizeof(double)); // TODO: did not free
 		F = (*A)->fieldlist;
-		for (i=0;i<Nf;i++)
+        S = (*A)->sourcelist;
+		for (i=0;i<Nf;i++) {
 			F[i] = fieldlist[i];
+            S[i] = fieldlist[i];
+        }
+
 	}
 	for (z = 0; z < 8; z++) {
 		free(fieldcell[z]);
